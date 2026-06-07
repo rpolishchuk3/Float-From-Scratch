@@ -1,4 +1,4 @@
-# NFloat From Scratch - A Custom 32-bit Floating-Point Implementation in C
+# Float From Scratch - A Custom 32-bit Floating-Point Implementation in C
 
 A from-scratch implementation of a custom floating-point numeric type in C, built entirely using bitwise operations. NewFloat trades IEEE 754's 8-bit exponent for a 5-bit exponent and expands the mantissa to 26 bits, squeezing out extra precision at the cost of range - and implementing all arithmetic directly on the binary representation without ever touching `float` or `double` math.
 
