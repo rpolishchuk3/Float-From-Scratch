@@ -20,12 +20,9 @@ This project explores how floating-point numbers are represented and manipulated
 
 ### Why This Matters
 
-- **Embedded & Low-Level Systems**  
-  Many embedded systems (e.g., IoT devices, microcontrollers) lack full IEEE-754 support or require optimized numeric formats. Implementing a custom float type demonstrates how numerical computation can be adapted to constrained environments.
-- **Computer Architecture & Compilers**  
-  This project directly relates to how CPUs handle arithmetic operations at the hardware level and how compilers translate high-level math into machine instructions.
-- **Graphics & Game Development**  
-  Efficient floating-point operations are essential in rendering pipelines, physics engines, and real-time simulations where performance is critical.
+- **Embedded & Low-Level Systems**: Many embedded systems (e.g., IoT devices, microcontrollers) lack full IEEE-754 support or require optimized numeric formats. Implementing a custom float type demonstrates how numerical computation can be adapted to constrained environments.
+- **Computer Architecture & Compilers**: This project directly relates to how CPUs handle arithmetic operations at the hardware level and how compilers translate high-level math into machine instructions.
+- **Graphics & Game Development**: Efficient floating-point operations are essential in rendering pipelines, physics engines, and real-time simulations where performance is critical.
 
 ### Key Takeaway
 
