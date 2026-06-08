@@ -14,6 +14,25 @@ Custom float formats like this come up in real contexts: ML accelerators use low
 
 ---
 
+## Real-World Relevance
+
+This project explores how floating-point numbers are represented and manipulated at a low level, which is critical in systems where precision, performance, and determinism matter.
+
+### Why This Matters
+
+- **Embedded & Low-Level Systems**  
+  Many embedded systems (e.g., IoT devices, microcontrollers) lack full IEEE-754 support or require optimized numeric formats. Implementing a custom float type demonstrates how numerical computation can be adapted to constrained environments.
+- **Computer Architecture & Compilers**  
+  This project directly relates to how CPUs handle arithmetic operations at the hardware level and how compilers translate high-level math into machine instructions.
+- **Graphics & Game Development**  
+  Efficient floating-point operations are essential in rendering pipelines, physics engines, and real-time simulations where performance is critical.
+
+### Key Takeaway
+
+By building a floating-point system from scratch, this project bridges the gap between high-level programming and hardware-level computation, providing a deeper understanding of how numerical data is stored, processed, and optimized in real-world systems.
+
+---
+
 ## Overview
 
 The custom type - `NewFloat` - is a `uint32_t` under the hood, with its 32 bits split as **1 sign / 5 exponent / 26 mantissa** instead of IEEE 754's 1/8/23. Three exponent bits move to the mantissa, trading a dynamic range of 10⁷⁶ down to roughly 10⁹ in exchange for finer fractional resolution.
