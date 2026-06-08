@@ -1,99 +1,111 @@
-# Float From Scratch - A Custom 32-bit Floating-Point Implementation in C
+# Float From Scratch - Custom 32-bit Floating-Point in C
 
-A from-scratch implementation of a custom floating-point numeric type in C, built entirely using bitwise operations. NewFloat trades IEEE 754's 8-bit exponent for a 5-bit exponent and expands the mantissa to 26 bits, squeezing out extra precision at the cost of range - and implementing all arithmetic directly on the binary representation without ever touching `float` or `double` math.
+A hand-built floating-point numeric type implemented entirely in C using bitwise operations. No `float` or `double` arithmetic - every operation, from conversion to addition, works directly on the binary representation.
+
+---
+
+## Motivation
+
+IEEE 754 is the universal standard for floating-point arithmetic, but it's a set of engineering tradeoffs, not laws of nature. The 8-bit exponent in a 32-bit `float` gives you a range of roughly ±3.4 × 10³⁸ - far more than most applications ever need - while leaving only 23 bits for the mantissa. I wanted to explore what happens when you flip that tradeoff: shrink the exponent, expand the mantissa, and see what you gain in precision and what you give up in range.
+
+Beyond the design question, I wanted to actually build it - not just read about it. That means writing the conversion logic, implementing addition with proper exponent alignment and normalization, and handling edge cases like subnormals and overflow entirely through bit manipulation. No shortcuts, no casting to `double` to do the math.
+
+Custom float formats like this come up in real contexts: ML accelerators use low-bit formats (bfloat16, FP8) to maximize throughput; embedded systems work with fixed-width types where range is predictable and precision matters more; graphics hardware historically used reduced-exponent formats for color math. The tradeoffs here are the same ones engineers make in those domains.
 
 ---
 
 ## Overview
 
-IEEE 754 single-precision floats allocate 23 bits to the mantissa. NewFloat reallocates 3 of the 8 exponent bits to the mantissa instead, producing a 26-bit fraction field. The result is a floating-point format with finer fractional precision over a narrower exponent range, represented in the same 32-bit footprint as a standard `float`.
+The custom type - `NewFloat` - is a `uint32_t` under the hood, with its 32 bits split as **1 sign / 5 exponent / 26 mantissa** instead of IEEE 754's 1/8/23. Three exponent bits move to the mantissa, trading a dynamic range of 10⁷⁶ down to roughly 10⁹ in exchange for finer fractional resolution.
 
-All operations - conversion, inspection, doubling, and addition - are implemented purely through bit masking, shifting, and integer arithmetic. No floating-point arithmetic is used anywhere in the core logic.
+The full implementation covers:
+- Parsing raw bit strings into the format
+- Converting standard IEEE 754 `float` values across, including subnormal handling
+- Printing the stored value as a decimal
+- Doubling and adding two `NewFloat` values using a proper FPU-style pipeline
 
 ---
 
 ## Format Specification
 
-NewFloat is stored in a `uint32_t` with the following layout:
-
 ```
-┌ Sign (1 bit)
-│   ┌ Exponent (5 bits, biased by 15)
-│   │         Mantissa (26 bits)
-│ ┌─┴─┐ ┌───────────┴────────────┐
-0 00000 00000000000000000000000000
+Bit 31     Bits 30–26     Bits 25–0
+  │            │               │
+Sign (1)   Exponent (5)   Mantissa (26)
 ```
 
-| Field | Bits | Details |
-|-------|------|---------|
-| Sign | 31 | `0` = positive, `1` = negative |
-| Exponent | 30–26 | Biased by 15; actual range −14 to +16 |
-| Mantissa | 25–0 | Fractional bits; leading `1` implicit when exponent ≠ 0 |
+| Field | Width | Encoding |
+|-------|-------|----------|
+| Sign | 1 bit | `0` = positive, `1` = negative |
+| Exponent | 5 bits | Biased by 15; actual range −14 to +16 |
+| Mantissa | 26 bits | Fractional bits; implicit leading `1` when exp ≠ 0 |
 
-Compared to IEEE 754 `float`:
+Side-by-side with IEEE 754 `float`:
 
-| Property | IEEE 754 `float` | NewFloat |
-|----------|-----------------|----------|
-| Total bits | 32 | 32 |
+| | IEEE 754 `float` | `NewFloat` |
+|--|--|--|
 | Exponent bits | 8 | 5 |
-| Mantissa bits | 23 | 26 |
+| Mantissa bits | 23 | **26** |
 | Exponent bias | 127 | 15 |
-| Actual exp range | −126 to +127 | −14 to +16 |
-| Subnormal exponent | biased `00000000` | biased `00000` |
+| Exp range | −126 to +127 | −14 to +16 |
+| Subnormal threshold | biased exp = `0x00` | biased exp = `0b00000` |
+| Overflow encoding | ±infinity (`0xFF`) | saturates to max value |
 
-When the biased exponent is `00000`, the value is subnormal: the leading digit is `0` rather than `1`, and the actual exponent is fixed at −14. The biased exponent `11111` (31) is reserved as overflow/saturation - the format saturates to the maximum representable value rather than encoding infinity.
+When the biased exponent is `00000`, the value is subnormal: the leading digit is `0` and the actual exponent is fixed at −14. Rather than encoding infinity, the format saturates - overflow clamps to the largest representable value.
 
 ---
 
 ## Features
 
-- **Bit-string parser** - converts a 32-character `'0'`/`'1'` string directly into a `NewFloat` via serial shift-and-OR
-- **Debug printer** - dumps the internal binary layout as `sign | exponent | mantissa`, space-separated, for direct inspection of the bit fields
-- **IEEE 754 → NewFloat converter** - type-puns a `float` via pointer cast, extracts its sign/exponent/mantissa, rebiases the exponent to 15, and repacks into the 32-bit NewFloat layout; handles subnormals, saturation, and underflow
-- **Decimal printer** - reconstructs the true value from the bit fields using integer powers of 2 and prints to 7 decimal places via `double` accumulation
-- **Doubling** (`nfloat_double`) - implemented as a pure exponent increment; handles the subnormal-to-normal boundary and saturates at overflow
-- **Addition** (`nfloat_add`) - full floating-point addition pipeline: exponent alignment via right-shift, signed mantissa addition/subtraction, normalization loop, subnormal demotion, and overflow saturation
+- **Bit-string parser** - reads a 32-char `'0'`/`'1'` string and packs it into a `NewFloat` via shift-and-OR
+- **Debug printer** - prints the raw `sign | exponent | mantissa` bit fields, space-separated
+- **IEEE 754 converter** - type-puns a `float`, extracts its fields, rebiases the exponent, and repacks into the `NewFloat` layout; handles subnormals, underflow, and overflow
+- **Decimal printer** - reconstructs the true value bit-by-bit using powers of 2, printed to 7 decimal places
+- **Doubling** - pure exponent increment with correct subnormal-to-normal boundary promotion
+- **Addition** - full pipeline: align exponents, add or subtract mantissas, normalize, handle subnormals and saturation
 
 ---
 
-## Implementation Details
+## Implementation Highlights
 
-### Type Punning for Conversion
+### Accessing IEEE 754 bits without undefined behavior
 
-`float_to_nfloat` accesses the raw IEEE 754 bits of a `float` without any cast that would invoke undefined behavior, by going through a `uint32_t *` pointer - a standard pattern for reading the internal representation of floating-point values in C:
+To read the raw binary of a `float`, I type-pun through a `uint32_t *` pointer - the standard C approach for inspecting floating-point internals:
 
 ```c
 uint32_t *float_bits = (uint32_t *)&f;
 uint32_t bits = *float_bits;
+
+uint32_t sign     = (bits >> 31) & 1;
+uint32_t exponent = (bits >> 23) & 0xFF;
+uint32_t mantissa =  bits        & 0x7FFFFF;
 ```
 
-The sign, 8-bit exponent, and 23-bit mantissa are then extracted with masks and shifted into NewFloat's 5/26-bit layout.
+### Exponent rebias
 
-### Exponent Rebias
-
-IEEE 754 uses a bias of 127; NewFloat uses 15. Conversion subtracts 127, then adds 15:
+IEEE 754 biases by 127; `NewFloat` biases by 15. The conversion is a subtract-and-add:
 
 ```c
 int actual_exp = (int)exponent - 127;
-int target_exp = actual_exp + 15;
+int target_exp  = actual_exp + 15;
 ```
 
-Values that underflow the 5-bit range are demoted to subnormals by right-shifting the full mantissa (with implicit leading 1 restored) until the exponent reaches the floor. Values that overflow saturate to `(sign << 31) | (30 << 26) | 0x3FFFFFF`.
+If `target_exp` underflows (≤ 0), the implicit leading `1` is shifted into the mantissa to produce a subnormal. If it overflows (≥ 31), the result saturates.
 
-### Mantissa Alignment in Addition
+### Addition: align → combine → normalize
 
-Before adding two NewFloat values, their mantissas must share a common exponent. The smaller operand's mantissa is right-shifted by the exponent difference, with a 64-bit intermediate (`uint64_t`) used throughout to prevent overflow during accumulation:
+The trickiest operation. Both operands are expanded to include their implicit leading bit, then the smaller one is right-shifted to match the larger exponent:
 
 ```c
 int diff = actual_exp_first - actual_exp_second;
-full_mantis_second = full_mantis_second >> diff;
+full_mantis_second >>= diff;
 ```
 
-After addition or subtraction, the result is renormalized: shifted right if the carry bit overflows bit 26, or shifted left if the result is subnormal, with the exponent adjusted in step. The final value is then repacked into the 32-bit NewFloat layout.
+A `uint64_t` intermediate prevents overflow during the addition. After combining, the result is normalized - right-shifted if a carry overflows bit 26, left-shifted if the result is subnormal - then repacked into 32 bits.
 
-### Subnormal Boundary in Doubling
+### Subnormal promotion in doubling
 
-`nfloat_double` detects the subnormal-to-normal transition: when a subnormal mantissa's leading `1` shifts into bit 26, the exponent is set to `1` (biased) and the mantissa is shifted to match, rather than blindly incrementing the zero exponent:
+When a subnormal's leading `1` bit shifts into the normalized position (bit 26), the exponent transitions from 0 to 1 rather than staying subnormal:
 
 ```c
 if (mantissa & (1 << 25)) {
@@ -105,15 +117,15 @@ if (mantissa & (1 << 25)) {
 
 ## Example Usage
 
-The program reads from `stdin`, dispatching on a mode prefix (`p1`–`p4`):
+The program reads from `stdin` with a mode prefix on each line:
 
-| Mode | Input format | Operation |
-|------|-------------|-----------|
-| `p1` | 32-char bit string | Parse and debug-print internal layout |
-| `p2` | `float` literal | Convert IEEE 754 → NewFloat, debug-print |
-| `p3` | 32-char bit string | Parse and print decimal value |
-| `p4 double` | `float` literal | Double the value, print decimal |
-| `p4 add` | two `float` literals | Add two values, print decimal |
+| Prefix | Input | Operation |
+|--------|-------|-----------|
+| `p1` | 32-char bit string | Parse → debug print |
+| `p2` | `float` literal | Convert IEEE 754 → debug print |
+| `p3` | 32-char bit string | Parse → decimal print |
+| `p4 double` | `float` literal | Double → decimal print |
+| `p4 add` | two `float` literals | Add → decimal print |
 
 **Input:**
 ```
@@ -133,38 +145,36 @@ p4 add 3.4 -2.9
 0.5000000
 ```
 
+**Conversion walkthrough - `3.9` as IEEE 754 then as `NewFloat`:**
+
+```
+IEEE 754:  0 10000000 11110011001100110011010   (exp bias 127 → actual 1)
+NewFloat:  0 10000     11110011001100110011010000 (exp bias 15 → actual 1)
+                       └─ 3 extra mantissa bits ─┘
+```
+
+The exponent encodes the same value; the mantissa gains 3 bits of fractional precision.
+
 ---
 
-## Building & Running
+## Build & Run
 
-### Prerequisites
-
-- GCC with C99 support (`-std=c99`)
-
-### Compile
+**Requirements:** GCC, C99
 
 ```bash
+# Compile
 gcc -Wall -Werror -std=c99 -o nfloat nfloat.c
-```
 
-Or with the included Makefile:
-
-```bash
+# Or via Makefile
 make
-```
 
-### Run
-
-```bash
+# Run with a file
 ./nfloat < input.txt
-```
 
-Or interactively:
-
-```bash
+# Run interactively
 ./nfloat
-p1 00010011111111111111000000000000
-p4 add 3.14 3.14
+p2 3.14
+p4 add 1.5 -0.25
 ```
 
 ---
@@ -174,18 +184,36 @@ p4 add 3.14 3.14
 ```
 .
 ├── src/
-│   └── nfloat.c          # Full implementation - parser, converter, printer, arithmetic
-├── Testcases/            # Input/output pairs covering all four operation modes
+│   └── nfloat.c       # Parser, converter, printer, arithmetic
+├── Testcases/         # Input/output pairs for all four modes
 ├── Makefile
 └── README.md
 ```
 
 ---
 
+## Limitations
+
+- **Truncation only** - mantissa shifts truncate rather than round, so error accumulates across chained operations
+- **No infinity or NaN** - overflow saturates to the max value; there is no signaling mechanism for invalid results
+- **Narrow range** - actual exponents of −14 to +16 cover values from ~0.00006 to ~65536; anything outside that saturates or underflows to zero
+- **No multiplication or division** - the arithmetic suite covers doubling and addition only
+
+---
+
 ## Future Improvements
 
-- **Rounding modes** - currently truncates on mantissa shifts; add round-to-nearest-even (banker's rounding) to reduce accumulated error across multi-step calculations
-- **Multiplication and division** - extend the arithmetic suite; multiplication is a natural next step since it only requires mantissa multiply and exponent add, without the alignment complexity of addition
-- **Infinity and NaN encoding** - use the reserved biased exponent `11111` for ±infinity and quiet NaN instead of saturating, bringing the format closer to IEEE 754 semantics
-- **Extended precision variant** - parametrize the exponent/mantissa split at compile time to explore the precision-range tradeoff across different bit allocations
-- **Hardware simulation** - model the addition pipeline as discrete stages (align, add, normalize, round) to mirror how an FPU would implement this in logic gates
+- **Round-to-nearest-even** - replace truncation with proper banker's rounding to minimize cumulative error
+- **Multiplication and division** - multiplication is the natural next operation: add exponents, multiply mantissas, normalize
+- **Infinity and NaN encoding** - repurpose biased exponent `11111` for ±∞ and quiet NaN, matching IEEE 754 semantics
+- **Parametric format** - make the exponent/mantissa split a compile-time constant to explore the precision-range tradeoff across different configurations (e.g. 3/28, 6/25)
+- **FPU pipeline model** - decompose addition into explicit stages (align, add, normalize, round) to mirror how hardware floating-point units are designed
+
+---
+
+## Key Takeaways
+
+- **Floating-point is a set of tradeoffs, not a fixed standard.** Shifting bits between the exponent and mantissa directly changes what a format is good at - this is exactly the design space that ML hardware teams work in with bfloat16 and FP8.
+- **Subnormals are genuinely subtle.** The boundary between subnormal and normal behavior requires special-casing in every operation: conversion, doubling, addition, and printing all need to handle it separately.
+- **Type punning gives you direct access to the machine representation.** Reading a `float`'s bits through a `uint32_t *` is the standard low-level technique; understanding why it works (and why alternatives like direct cast are UB) is fundamental to systems programming in C.
+- **Addition is the hard operation.** Alignment, signed subtraction, normalization, subnormal demotion, and saturation all have to be handled in sequence - it's a complete mini-pipeline, which is why FPUs dedicate significant silicon to it.
