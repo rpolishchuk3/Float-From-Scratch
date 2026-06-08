@@ -10,7 +10,7 @@ IEEE 754 is the universal standard for floating-point arithmetic, but it's a set
 
 Beyond the design question, I wanted to actually build it - not just read about it. That means writing the conversion logic, implementing addition with proper exponent alignment and normalization, and handling edge cases like subnormals and overflow entirely through bit manipulation. No shortcuts, no casting to `double` to do the math.
 
-Custom float formats like this come up in real contexts: ML accelerators use low-bit formats (bfloat16, FP8) to maximize throughput; embedded systems work with fixed-width types where range is predictable and precision matters more; graphics hardware historically used reduced-exponent formats for color math. The tradeoffs here are the same ones engineers make in those domains.
+Custom float formats like this come up in real contexts: ML accelerators use low-bit formats (bfloat16, FP8) to maximize throughput. Embedded systems work with fixed-width types where range is predictable and precision matters more. Graphics hardware historically used reduced-exponent formats for color math. The tradeoffs here are the same ones engineers make in those domains.
 
 ---
 
@@ -37,8 +37,8 @@ Sign (1)   Exponent (5)   Mantissa (26)
 | Field | Width | Encoding |
 |-------|-------|----------|
 | Sign | 1 bit | `0` = positive, `1` = negative |
-| Exponent | 5 bits | Biased by 15; actual range −14 to +16 |
-| Mantissa | 26 bits | Fractional bits; implicit leading `1` when exp ≠ 0 |
+| Exponent | 5 bits | Biased by 15, actual range −14 to +16 |
+| Mantissa | 26 bits | Fractional bits, implicit leading `1` when exp ≠ 0 |
 
 Side-by-side with IEEE 754 `float`:
 
@@ -59,7 +59,7 @@ When the biased exponent is `00000`, the value is subnormal: the leading digit i
 
 - **Bit-string parser** - reads a 32-char `'0'`/`'1'` string and packs it into a `NewFloat` via shift-and-OR
 - **Debug printer** - prints the raw `sign | exponent | mantissa` bit fields, space-separated
-- **IEEE 754 converter** - type-puns a `float`, extracts its fields, rebiases the exponent, and repacks into the `NewFloat` layout; handles subnormals, underflow, and overflow
+- **IEEE 754 converter** - type-puns a `float`, extracts its fields, rebiases the exponent, and repacks into the `NewFloat` layout. Handles subnormals, underflow, and overflow
 - **Decimal printer** - reconstructs the true value bit-by-bit using powers of 2, printed to 7 decimal places
 - **Doubling** - pure exponent increment with correct subnormal-to-normal boundary promotion
 - **Addition** - full pipeline: align exponents, add or subtract mantissas, normalize, handle subnormals and saturation
@@ -83,7 +83,7 @@ uint32_t mantissa =  bits        & 0x7FFFFF;
 
 ### Exponent rebias
 
-IEEE 754 biases by 127; `NewFloat` biases by 15. The conversion is a subtract-and-add:
+IEEE 754 biases by 127. `NewFloat` biases by 15. The conversion is a subtract-and-add:
 
 ```c
 int actual_exp = (int)exponent - 127;
@@ -153,7 +153,7 @@ NewFloat:  0 10000     11110011001100110011010000 (exp bias 15 → actual 1)
                        └─ 3 extra mantissa bits ─┘
 ```
 
-The exponent encodes the same value; the mantissa gains 3 bits of fractional precision.
+The exponent encodes the same value, the mantissa gains 3 bits of fractional precision.
 
 ---
 
@@ -195,8 +195,8 @@ p4 add 1.5 -0.25
 ## Limitations
 
 - **Truncation only** - mantissa shifts truncate rather than round, so error accumulates across chained operations
-- **No infinity or NaN** - overflow saturates to the max value; there is no signaling mechanism for invalid results
-- **Narrow range** - actual exponents of −14 to +16 cover values from ~0.00006 to ~65536; anything outside that saturates or underflows to zero
+- **No infinity or NaN** - overflow saturates to the max value. There is no signaling mechanism for invalid results
+- **Narrow range** - actual exponents of −14 to +16 cover values from ~0.00006 to ~65536. Anything outside that saturates or underflows to zero
 - **No multiplication or division** - the arithmetic suite covers doubling and addition only
 
 ---
@@ -215,5 +215,5 @@ p4 add 1.5 -0.25
 
 - **Floating-point is a set of tradeoffs, not a fixed standard.** Shifting bits between the exponent and mantissa directly changes what a format is good at - this is exactly the design space that ML hardware teams work in with bfloat16 and FP8.
 - **Subnormals are genuinely subtle.** The boundary between subnormal and normal behavior requires special-casing in every operation: conversion, doubling, addition, and printing all need to handle it separately.
-- **Type punning gives you direct access to the machine representation.** Reading a `float`'s bits through a `uint32_t *` is the standard low-level technique; understanding why it works (and why alternatives like direct cast are UB) is fundamental to systems programming in C.
+- **Type punning gives you direct access to the machine representation.** Reading a `float`'s bits through a `uint32_t *` is the standard low-level technique and understanding why it works (and why alternatives like direct cast are UB) is fundamental to systems programming in C.
 - **Addition is the hard operation.** Alignment, signed subtraction, normalization, subnormal demotion, and saturation all have to be handled in sequence - it's a complete mini-pipeline, which is why FPUs dedicate significant silicon to it.
