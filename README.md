@@ -1,6 +1,6 @@
 # Float From Scratch - Custom 32-bit Floating-Point in C
 
-A hand-built floating-point numeric type implemented entirely in C using bitwise operations. No `float` or `double` arithmetic - every operation, from conversion to addition, works directly on the binary representation.
+A hand-built floating-point numeric type implemented entirely in C using bitwise operations. Input is parsed by `scanf` into an ordinary `float`. After that, conversion, arithmetic and decimal printing all work on the bits with integer operations - no `float` or `double` arithmetic.
 
 ---
 
@@ -53,7 +53,7 @@ Sign (1)   Exponent (5)   Mantissa (26)
 | Field | Width | Encoding |
 |-------|-------|----------|
 | Sign | 1 bit | `0` = positive, `1` = negative |
-| Exponent | 5 bits | Biased by 15, actual range −14 to +16 |
+| Exponent | 5 bits | Biased by 15, actual range −14 to +15 (`11111` is never produced) |
 | Mantissa | 26 bits | Fractional bits, implicit leading `1` when exp ≠ 0 |
 
 Side-by-side with IEEE 754 `float`:
@@ -63,11 +63,11 @@ Side-by-side with IEEE 754 `float`:
 | Exponent bits | 8 | 5 |
 | Mantissa bits | 23 | **26** |
 | Exponent bias | 127 | 15 |
-| Exp range | −126 to +127 | −14 to +16 |
+| Exp range | −126 to +127 | −14 to +15 |
 | Subnormal threshold | biased exp = `0x00` | biased exp = `0b00000` |
 | Overflow encoding | ±infinity (`0xFF`) | saturates to max value |
 
-When the biased exponent is `00000`, the value is subnormal: the leading digit is `0` and the actual exponent is fixed at −14. Rather than encoding infinity, the format saturates - overflow clamps to the largest representable value.
+When the biased exponent is `00000`, the value is subnormal: the leading digit is `0` and the actual exponent is fixed at −14. Rather than encoding infinity, the format saturates - overflow clamps to the largest representable value, `0 11110 111…1` (65535.9995). An IEEE infinity converts to that value with its sign; NaN converts to `+0`.
 
 ---
 
@@ -75,8 +75,8 @@ When the biased exponent is `00000`, the value is subnormal: the leading digit i
 
 - **Bit-string parser** - reads a 32-char `'0'`/`'1'` string and packs it into a `NewFloat` via shift-and-OR
 - **Debug printer** - prints the raw `sign | exponent | mantissa` bit fields, space-separated
-- **IEEE 754 converter** - type-puns a `float`, extracts its fields, rebiases the exponent, and repacks into the `NewFloat` layout. Handles subnormals, underflow, and overflow
-- **Decimal printer** - reconstructs the true value bit-by-bit using powers of 2, printed to 7 decimal places
+- **IEEE 754 converter** - copies a `float`'s bits into a `uint32_t` with `memcpy`, extracts its fields, rebiases the exponent, and repacks into the `NewFloat` layout. Handles subnormals, underflow, overflow and infinity
+- **Decimal printer** - prints the exact stored value to 7 decimal places using only 64-bit integer arithmetic, rounding half to even
 - **Doubling** - pure exponent increment with correct subnormal-to-normal boundary promotion
 - **Addition** - full pipeline: align exponents, add or subtract mantissas, normalize, handle subnormals and saturation
 
@@ -84,13 +84,13 @@ When the biased exponent is `00000`, the value is subnormal: the leading digit i
 
 ## Implementation Highlights
 
-### Accessing IEEE 754 bits without undefined behavior
+### Reading a float's bits without undefined behavior
 
-To read the raw binary of a `float`, I type-pun through a `uint32_t *` pointer - the standard C approach for inspecting floating-point internals:
+Reading a `float` through a `uint32_t *` breaks C's strict aliasing rule. That is undefined behavior: the optimizer may assume a `float` and a `uint32_t` never share memory. Copying the bytes with `memcpy` is the defined way, and compilers turn it into a single register move:
 
 ```c
-uint32_t *float_bits = (uint32_t *)&f;
-uint32_t bits = *float_bits;
+uint32_t bits;
+memcpy(&bits, &f, sizeof bits);
 
 uint32_t sign     = (bits >> 31) & 1;
 uint32_t exponent = (bits >> 23) & 0xFF;
@@ -117,7 +117,7 @@ int diff = actual_exp_first - actual_exp_second;
 full_mantis_second >>= diff;
 ```
 
-A `uint64_t` intermediate prevents overflow during the addition. After combining, the result is normalized - right-shifted if a carry overflows bit 26, left-shifted if the result is subnormal - then repacked into 32 bits.
+A `uint64_t` intermediate prevents overflow during the addition. After combining, the result is normalized: shifted right if the sum carries past bit 26, shifted left until the leading 1 reaches bit 26 or the exponent reaches −14. If the leading 1 still hasn't reached bit 26, the result is subnormal and is stored with biased exponent `00000`. Otherwise it is repacked with its rebiased exponent.
 
 ### Subnormal promotion in doubling
 
@@ -169,29 +169,37 @@ NewFloat:  0 10000     11110011001100110011010000 (exp bias 15 → actual 1)
                        └─ 3 extra mantissa bits ─┘
 ```
 
-The exponent encodes the same value, the mantissa gains 3 bits of fractional precision.
+The exponent encodes the same value. The 3 extra mantissa bits are `000`: `scanf` already rounded the input to a 23-bit `float`, so conversion can't recover precision that was never there. The extra bits are used by arithmetic results - when addition shifts the smaller operand right to align exponents, its low bits land in them instead of being dropped.
 
 ---
 
 ## Build & Run
 
-**Requirements:** GCC, C99
+**Requirements:** a C99 compiler (clang on macOS, or GCC), make
+
+Run everything from the repository root.
+
+| Command | What it does |
+|---------|--------------|
+| `make` | Builds `nfloat` from `src/nfloat.c` |
+| `make test` | Runs every `Testcases/*-input.txt` and compares against the matching `-output.txt` |
+| `make clean` | Removes the binary and test output |
+
+Building by hand:
 
 ```bash
-# Compile
-gcc -Wall -Werror -std=c99 -o nfloat nfloat.c
-
-# Or via Makefile
-make
-
-# Run with a file
-./nfloat < input.txt
-
-# Run interactively
-./nfloat
-p2 3.14
-p4 add 1.5 -0.25
+cc -std=c99 -Wall -Wextra -o nfloat src/nfloat.c
 ```
+
+Running:
+
+```bash
+./nfloat < Testcases/1-4-input.txt
+```
+
+Or run `./nfloat` and type lines such as `p2 3.14` or `p4 add 1.5 -0.25`, then press Ctrl-D to finish.
+
+Malformed input (a bit string that isn't exactly 32 `0`/`1` characters, an unknown `pN` prefix, an unknown `p4` operation, or a missing number) prints an error to stderr and exits with status 1.
 
 ---
 
@@ -201,7 +209,7 @@ p4 add 1.5 -0.25
 .
 ├── src/
 │   └── nfloat.c       # Parser, converter, printer, arithmetic
-├── Testcases/         # Input/output pairs for all four modes
+├── Testcases/         # Input/output pairs: 1-1 to 1-4 for p1-p4, 1-5 for edge cases
 ├── Makefile
 └── README.md
 ```
@@ -211,8 +219,9 @@ p4 add 1.5 -0.25
 ## Limitations
 
 - **Truncation only** - mantissa shifts truncate rather than round, so error accumulates across chained operations
-- **No infinity or NaN** - overflow saturates to the max value. There is no signaling mechanism for invalid results
-- **Narrow range** - actual exponents of −14 to +16 cover values from ~0.00006 to ~65536. Anything outside that saturates or underflows to zero
+- **No infinity or NaN** - overflow and infinity saturate to the max value, and NaN becomes `+0`. There is no signaling mechanism for invalid results
+- **Narrow range** - normal values run from 2⁻¹⁴ (~0.000061) to just under 2¹⁶ (65535.9995). Subnormals extend down to 2⁻⁴⁰ (~9.1 × 10⁻¹³) with fewer significant bits. Anything smaller becomes zero, anything larger saturates
+- **Input precision is capped by `float`** - inputs are parsed into a 23-bit-mantissa `float` first, so converted values never use the 3 extra mantissa bits
 - **No multiplication or division** - the arithmetic suite covers doubling and addition only
 
 ---
@@ -231,5 +240,5 @@ p4 add 1.5 -0.25
 
 - **Floating-point is a set of tradeoffs, not a fixed standard.** Shifting bits between the exponent and mantissa directly changes what a format is good at - this is exactly the design space that ML hardware teams work in with bfloat16 and FP8.
 - **Subnormals are genuinely subtle.** The boundary between subnormal and normal behavior requires special-casing in every operation: conversion, doubling, addition, and printing all need to handle it separately.
-- **Type punning gives you direct access to the machine representation.** Reading a `float`'s bits through a `uint32_t *` is the standard low-level technique and understanding why it works (and why alternatives like direct cast are UB) is fundamental to systems programming in C.
+- **Reading a float's bits is a strict aliasing trap.** Casting `&f` to `uint32_t *` compiles and usually works, but it is undefined behavior and can break under optimization. `memcpy` (or a union, in C99 and later) is the defined way to reach the representation.
 - **Addition is the hard operation.** Alignment, signed subtraction, normalization, subnormal demotion, and saturation all have to be handled in sequence - it's a complete mini-pipeline, which is why FPUs dedicate significant silicon to it.
